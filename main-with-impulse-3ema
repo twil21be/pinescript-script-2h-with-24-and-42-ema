@@ -1,0 +1,353 @@
+//@version=5
+strategy("TWI 2h new", overlay=true,  calc_on_every_tick=true, default_qty_type=strategy.cash, default_qty_value=1000, initial_capital=2000)
+
+
+// The provided Pine Script code defines a trading strategy in TradingView, integrating price action and technical indicators. Key features include:
+// Tracking daily open price: Identifies whether the price crosses above or below the daily open price twice.
+// EMA crossovers: Calculates 15-minute EMA(24) and EMA(42) for trend detection.
+// Supertrend: Utilizes the Supertrend indicator on a 30-minute timeframe to signal trade entries.
+// First 2-hour candle: Determines if the first 2-hour candle is bullish or bearish.
+// Buy/Sell conditions: Executes buy/sell trades based on EMA positioning, Supertrend direction, and price crossing the daily open.
+
+
+// Configurare variabile
+var string crossoverDirection = ""  // Variabilă pentru a reține direcția crossover-ului
+
+impulseGroupTwi = "twil21be strategy"
+atrPeriod = input.int(10, "ATR Length", minval = 1, group=impulseGroupTwi)
+factor = input.float(3.0, "Factor", minval = 0.01, step = 0.01, group=impulseGroupTwi)
+//positionSizeBTC = input.float(0.02, "Valoare Poziție în Bitcoin", minval = 0.01) // Valoarea în Bitcoin
+
+//TakeProfitDifference = input(10)
+StopLossDifference = input (10, group=impulseGroupTwi) //diferenta fata de ceva, ultima data fata de ema opusa
+TakeProfitRR = input (3, group=impulseGroupTwi)
+
+// Variabile pentru prima candelă
+var float firstHigh = na
+var float firstLow = na
+var float firstOpen = na
+var float firstClose = na
+var bool firstCandle = true
+var bool First2HisBullish = false
+var bool First2HisBearish = false
+
+
+//Măsurarea trecerii prețului în primele 6 candele swing peste pret de deschidere
+//si desenarea prețului de Deschidere al Zilei (UTC) line
+
+// Obține ora curentă a barei în UTC
+var float dayOpenPrice = na
+var line dayOpenLine = na
+var bool crossedAboveDaily = false
+var bool crossedBelowDaily = false
+var bool IsCrossedDaily = false
+var int crossCountShift = 0
+var bool firstCrossPrinted = false
+var bool secondCrossPrinted = false
+
+
+
+// Verifică dacă bara este prima bară a unei noi zile UTC
+isNewDay2 = (hour == 0 and minute == 0 and second == 0)
+
+// Setează prețul de deschidere la începutul zilei și resetează variabilele
+if (isNewDay2)
+    dayOpenPrice := open
+    // Resetează variabilele
+    dayOpenLine := line.new(x1=bar_index, y1=dayOpenPrice, x2=bar_index+1, y2=dayOpenPrice, color=color.blue, width=2, style=line.style_solid)
+    crossCountShift := 0
+    crossedAboveDaily := false
+    crossedBelowDaily := false
+    IsCrossedDaily := false
+    firstCrossPrinted := false
+    secondCrossPrinted := false
+    
+
+// Verificăm trecerea peste dayOpenPrice dacă nu este prima bară a zilei
+if (crossCountShift < 2 and not isNewDay2)
+    if (close > dayOpenPrice and open < dayOpenPrice and not crossedAboveDaily)
+        crossedAboveDaily := true
+        crossedBelowDaily := false
+        crossCountShift += 1
+        if (crossCountShift == 1 and not firstCrossPrinted)
+            label.new(bar_index, high, text="First DailyOpenCross is up", color=color.green, style=label.style_label_down)
+            firstCrossPrinted := true
+            IsCrossedDaily :=true
+            
+        if (crossCountShift == 2 and not secondCrossPrinted)
+            label.new(bar_index, high, text="Second DailyOpenCross is up", color=color.green, style=label.style_label_down)
+            secondCrossPrinted := true
+            
+            
+
+    if (close < dayOpenPrice and open > dayOpenPrice and not crossedBelowDaily)
+        crossedBelowDaily := true
+        crossedAboveDaily := false
+        crossCountShift += 1
+        if (crossCountShift == 1 and not firstCrossPrinted)
+            label.new(bar_index, high, text="First DailyOpenCross is down", color=color.red, style=label.style_label_down)
+            firstCrossPrinted := true
+            IsCrossedDaily := true
+        if (crossCountShift == 2 and not secondCrossPrinted)
+            label.new(bar_index, high, text="Second DailyOpenCross is down", color=color.red, style=label.style_label_down)
+            secondCrossPrinted := true
+
+// Desenează o linie orizontală persistentă la prețul de deschidere al zilei
+if (not na(dayOpenPrice))
+    line.set_xy2(dayOpenLine, bar_index+1, dayOpenPrice)
+
+
+// Linii verticale la ora 0 și 2 UTC
+if (hour == 0 and minute == 0)
+    line.new(x1=bar_index, y1=low, x2=bar_index, y2=high*1.1, color=color.purple, width=1, style=line.style_dotted)
+if (hour == 1 and minute == 45)
+    line.new(x1=bar_index, y1=low, x2=bar_index, y2=high*1.1, color=color.red, width=1, style=line.style_dotted)
+
+// Obține ora de deschidere a candelei pe timeframe de 2 ore
+time2H = request.security(syminfo.tickerid, "120", time)
+high2H = request.security(syminfo.tickerid, "120", high)
+low2H = request.security(syminfo.tickerid, "120", low)
+open2H = request.security(syminfo.tickerid, "120", open)
+close2H = request.security(syminfo.tickerid, "120", close)
+
+// Detectăm prima candelă de 2 ore din zi (la 00:00)
+isNewDay = (hour(time2H) == 0 and minute(time2H) == 0)
+
+// Verify if first 2h candle is bullish or bearish
+// Resetează variabilele la începutul zilei
+if (isNewDay)
+    firstCandle := true
+    firstHigh := high2H
+    firstLow := low2H
+    firstOpen := open2H
+    firstClose := close2H
+
+else
+    if (firstCandle)
+        firstHigh := math.max(firstHigh, high2H)
+        firstLow := math.min(firstLow, low2H)
+        firstClose := close2H  // Update firstClose with the latest 2H candle close
+
+// Oprește actualizarea după prima candelă de 2 ore
+if (firstCandle and not na(firstHigh) and not na(firstLow))
+    firstCandle := false
+
+// Determină dacă prima candelă este verde (bullish) sau roșie (bearish)
+First2HisBullish := firstClose > firstOpen
+First2HisBearish := firstClose < firstOpen
+
+
+// Desenarea săgeților și etichetelor la ora 2:00 UTC
+if (hour(time) == 2 and minute(time) == 0)
+    if (First2HisBearish)
+        label.new(bar_index-1, high, "Bearish", color=color.red, style=label.style_label_down, textcolor=color.white)
+        //line.new(bar_index, high, bar_index + 1, high + 10, color=color.red, width=2, style=line.style_solid)
+        
+    if (First2HisBullish)
+        label.new(bar_index-1, low, "Bullish", color=color.green, style=label.style_label_up, textcolor=color.white)
+        //line.new(bar_index, low, bar_index + 1, low - 10, color=color.green, width=2, style=line.style_solid)
+
+
+// Afișează valorile primei candele pe grafic
+plot(firstHigh, color=color.green, title="Maximul Primei Candele 2H", linewidth=2)
+plot(firstLow, color=color.red, title="Minimul Primei Candele 2H", linewidth=2)
+
+
+// Verificăm închiderea pe timeframe de 15 minute - sa fie mai mare decat maxim 2h, sau mai mic decat minim 2h
+// close15min = request.security(syminfo.tickerid, "15", close)
+// closeAboveMax = close15min > firstHigh
+// closeBelowMin = close15min < firstLow
+
+// Calcularea EMA-urilor pe timeframe de 15 minute
+ema24_15min = request.security(syminfo.tickerid, "15", ta.ema(close, 24))
+ema42_15min = request.security(syminfo.tickerid, "15", ta.ema(close, 42))
+
+crossoverUp = ta.crossover(ema24_15min, ema42_15min)  // Crossover pentru cumpărare
+crossoverDown = ta.crossunder(ema24_15min, ema42_15min) // Crossover pentru vânzare
+
+// Afișarea EMA-urilor pe grafic
+//plot(ema24_15min, color=color.blue, title="EMA 24", linewidth=1, offset=0)
+//plot(ema42_15min, color=color.orange, title="EMA 42", linewidth=1, offset=0)
+impulseGroup1 = "24/42 ema Colors"
+EMA_UpTrend_color = input(color.green, title="EMA 24/42 UpTrend Color", group=impulseGroup1)
+EMA_DownTrend_color = input(#ff0000, title="EMA 24/42 DownTrend Color", group=impulseGroup1)
+
+EMA_UpTrend = ema24_15min >= ema42_15min
+EMA_DownTrend = ema24_15min < ema42_15min
+
+plot(ema24_15min, color=color.new(EMA_UpTrend ? EMA_UpTrend_color : EMA_DownTrend_color, 0), title="EMA Small", style=plot.style_line, linewidth=1, offset=0)
+plot(ema42_15min, color=color.new(EMA_UpTrend ? EMA_UpTrend_color : EMA_DownTrend_color, 0), title="EMA Big", style=plot.style_line, linewidth=2, offset=0)
+
+// Calculează diferența absolută între benzi
+float emaDifference = math.abs(ema24_15min - ema42_15min)
+
+// Retinerea direcției crossover-ului
+if (crossoverUp)
+    crossoverDirection := "up"
+else if (crossoverDown)
+    crossoverDirection := "down"
+
+
+//afiseaza inca 3 ema (ca sa salvez un indicator)
+// Inputuri pentru utilizator (afișate pe aceeași linie)
+impulseGroup2 = "3 Emas"
+ema1Length = input.int(50, title="EMA 1 Length", inline="EMA1", group=impulseGroup2)  // Perioada EMA1
+ema1Color = input.color(color.rgb(176, 79, 241), title="EMA 1 Color", inline="EMA1", group=impulseGroup2)  // Culoarea EMA1
+showEma1 = input.bool(true, title="Show EMA 1", inline="EMA1", group=impulseGroup2)  // Afișare EMA1
+
+ema2Length = input.int(100, title="EMA 2 Length", inline="EMA2", group=impulseGroup2)  // Perioada EMA2
+ema2Color = input.color(#f0fc51, title="EMA 2 Color", inline="EMA2", group=impulseGroup2)  // Culoarea EMA2
+showEma2 = input.bool(true, title="Show EMA 2", inline="EMA2", group=impulseGroup2)  // Afișare EMA2
+
+ema3Length = input.int(200, title="EMA 3 Length", inline="EMA3")  // Perioada EMA3
+ema3Color = input.color(#6fc2fa, title="EMA 3 Color", inline="EMA3")  // Culoarea EMA3
+showEma3 = input.bool(true, title="Show EMA 3", inline="EMA3")  // Afișare EMA3
+
+// Calcularea EMA-urilor
+ema1 = ta.ema(close, ema1Length)
+ema2 = ta.ema(close, ema2Length)
+ema3 = ta.ema(close, ema3Length)
+
+// Afișarea EMA-urilor pe grafic, în funcție de opțiunile utilizatorului
+plot(showEma1 ? ema1 : na, color=ema1Color, title="EMA 1", linewidth=2)
+plot(showEma2 ? ema2 : na, color=ema2Color, title="EMA 2", linewidth=2)
+plot(showEma3 ? ema3 : na, color=ema3Color, title="EMA 3", linewidth=2)
+
+
+//candele de impuls soft michael
+// Settings for Impulse Candle
+
+// Parameters grouped under "Impulse Candle"
+impulseGroup = "Impulse Candle"
+length = input(10, title="Length for Average Calculation", group=impulseGroup)
+sizeMultiplier = input(1.5, title="Size Multiplier", group=impulseGroup)
+volumeMultiplier = input(1.5, title="Volume Multiplier", group=impulseGroup)
+bodyRatio = input(0.7, title="Body-to-Wick Ratio", group=impulseGroup)
+showImpulsiveCandle = input(true, title="Show Impulsive Candle", group=impulseGroup) // New boolean input
+
+// Averages
+avgRange = ta.sma(ta.tr, length)
+avgVolume = ta.sma(volume, length)
+
+// Candle Characteristics
+candleRange = high - low
+candleBody = math.abs(close - open)
+
+// Conditions
+isImpulsiveSize = candleRange > avgRange * sizeMultiplier
+isImpulsiveVolume = volume > avgVolume * volumeMultiplier
+isImpulsiveBody = candleBody > candleRange * bodyRatio
+
+// Impulsive Candle Condition
+isImpulsiveCandle = isImpulsiveSize and isImpulsiveVolume and isImpulsiveBody
+
+// Alert condition
+alertcondition(isImpulsiveCandle[1], title='Impulsive Candle', message='An impulsive candle has been detected')
+
+// Plot
+barcolor(showImpulsiveCandle and isImpulsiveCandle ? color.orange : na) // Modify to check the boolean
+
+
+
+
+
+
+
+// Calcularea Supertrend-ului pe timeframe de 30 minute
+[supertrend, direction] = request.security(syminfo.tickerid, "30", ta.supertrend(factor, atrPeriod))
+
+// Afișarea direcției Supertrend-ului
+bgcolor(direction < 0 ? color.new(color.green, 90) : na, title="Supertrend Bullish")
+bgcolor(direction > 0 ? color.new(color.red, 90) : na, title="Supertrend Bearish")
+
+// Condiții pentru deschiderea poziției de buy
+if (First2HisBullish and direction < 0 and IsCrossedDaily and ema24_15min>dayOpenPrice and ema42_15min>dayOpenPrice )// and strategy.opentrades == 0)  // Bullish când direction este < 0 
+    //if (low <= ema42_15min or low <= ema24_15min) and (low[1] > ema42_15min and low[1] > ema24_15min) // Verificăm dacă prețul a intrat in benzile EMA
+    if (low <= ema42_15min or low <= ema24_15min) and (low[1] > ema42_15min[1] and low[1] > ema24_15min[1]) // Verificăm dacă prețul a intrat in benzile EMA
+        entryPrice = close
+        
+        stopLossPrice = ema42_15min - (emaDifference/2) 
+        takeProfitPrice = entryPrice + (entryPrice-stopLossPrice) * TakeProfitRR
+        //takeProfitPrice = entryPrice + TakeProfitDifference
+
+        // Desenare linie și etichetă pentru Stop Loss
+        line.new(x1=bar_index, y1=stopLossPrice, x2=bar_index + 10, y2=stopLossPrice, color=#ff0000, width=1)
+        label.new(x=bar_index + 2, y=stopLossPrice, text="SL: " + str.tostring(stopLossPrice, "#.####"), style=label.style_label_up, color=color.white, textcolor=#ff0000)
+
+        // Desenare linie și etichetă pentru Take Profit
+        line.new(x1=bar_index, y1=takeProfitPrice, x2=bar_index + 10, y2=takeProfitPrice, color=color.green, width=1)
+        label.new(x=bar_index + 2, y=takeProfitPrice, text="TP: " + str.tostring(takeProfitPrice, "#.##"), style=label.style_label_down, color=color.white, textcolor=color.green)
+
+
+        strategy.entry("Buy", strategy.long)//, qty = positionSizeBTC)
+        alert("BUY signal triggered for " + syminfo.tickerid, alert.freq_once_per_bar)
+        strategy.exit("Take Profit", "Buy", limit = takeProfitPrice, stop = stopLossPrice)
+        label.new(bar_index, close, "BUY", color=color.green, style=label.style_label_down)
+
+// Condiții pentru deschiderea poziției de sell
+if (First2HisBearish and direction > 0 and IsCrossedDaily and ema24_15min<dayOpenPrice and ema42_15min<dayOpenPrice)//and strategy.opentrades == 0)  // Bearish când direction este > 0 
+    //if (high >= ema42_15min or high >= ema24_15min) and (high[1] < ema42_15min and high[1] < ema24_15min)  // Verificăm dacă prețul a atins benzile EMA
+    if (high >= ema24_15min or high >= ema42_15min) and (high[1] < ema24_15min and high[1] < ema42_15min)  // Verificăm dacă prețul a atins benzile EMA
+        entryPrice = close
+        stopLossPrice = ema42_15min + (emaDifference/2)
+        //takeProfitPrice = entryPrice - TakeProfitDifference 
+        takeProfitPrice = entryPrice - (stopLossPrice-entryPrice) * TakeProfitRR
+       
+        // Desenare linie și etichetă pentru Stop Loss
+        line.new(x1=bar_index, y1=stopLossPrice, x2=bar_index + 10, y2=stopLossPrice, color=#ff0000, width=1)
+        label.new(x=bar_index + 2, y=stopLossPrice, text="SL: " + str.tostring(stopLossPrice, "#.####"), style=label.style_label_down, color=color.white, textcolor=#ff0000)
+
+        // Desenare linie și etichetă pentru Take Profit
+        line.new(x1=bar_index, y1=takeProfitPrice, x2=bar_index + 10, y2=takeProfitPrice, color=color.green, width=1)
+        label.new(x=bar_index + 2, y=takeProfitPrice, text="TP: " + str.tostring(takeProfitPrice, "#.##"), style=label.style_label_up, color=color.white, textcolor=color.green)
+
+        strategy.entry("Sell", strategy.short)//, qty = positionSizeBTC)
+        alert("SELL signal triggered for " + syminfo.tickerid, alert.freq_once_per_bar)
+        strategy.exit("Take Profit", "Sell", limit = takeProfitPrice, stop = stopLossPrice)
+        label.new(bar_index, close, "SELL", color=color.red, style=label.style_label_up)
+
+
+
+
+
+/// Debugging: afișare condiții closeAboveMax și closeBelowMin
+//plotchar(closeAboveMax ? 1 : 0, title="Close Above Max", color=color.blue, location=location.bottom, offset=0, size=size.small)
+//plotchar(closeBelowMin ? 1 : 0, title="Close Below Min", color=color.orange, location=location.bottom, offset=0, size=size.small)
+
+
+// Debugging: Afișează direcția crossover-ului pe grafic
+//plotchar(crossoverDirection == "up" ? 1 : na, title="Crossover Up", color=color.green, location=location.abovebar, offset=0, size=size.small)
+//plotchar(crossoverDirection == "down" ? 1 : na, title="Crossover Down", color=color.red, location=location.belowbar, offset=0, size=size.small)
+
+
+
+// Debugging: Afișare condiție pentru prețul între EMA-uri
+//plotchar((low <= ema42_15min or low <= ema24_15min) and (low[1] > ema42_15min[1] and low[1] > ema24_15min[1]) ? 1 : 0, title="Preț între EMA-uri", color=color.purple, location=location.top, offset=0, size=size.small)
+//plotchar((high >= ema24_15min or high >= ema42_15min) and (high[1] < ema24_15min[1] and high[1] < ema42_15min[1]) ? 1 : 0, title="Preț între EMA-uri", color=color.yellow, location=location.top, offset=0, size=size.small)
+
+//Debug pentru alte variabile sa le afisam in data window
+
+plot(close[0], title="Close", display=display.data_window)
+plot(low[0], title="Low", display=display.data_window)
+plot(low[1], title="Low[1]]", display=display.data_window)
+plot(ema42_15min[1], title="ema42_15min[1]", display=display.data_window)
+plot(ema24_15min[1], title="ema24_15min[1]", display=display.data_window)
+plot(direction, title="direction", display=display.data_window)
+plot(strategy.opentrades, title="strategy.opentrades", display=display.data_window)
+
+// Transformăm variabila booleană într-o valoare numerică
+numericBoolVariable2 = First2HisBullish ? 1 : 0
+// Afișăm variabila numerică în Data Window
+plot(numericBoolVariable2, title="First2HisBullish (1=TRUE, 0=FALSE)", display=display.data_window)
+
+// Transformăm variabila booleană într-o valoare numerică
+numericBoolVariable1 = First2HisBearish ? 1 : 0
+// Afișăm variabila numerică în Data Window
+plot(numericBoolVariable1, title="First2HisBearish (1=TRUE, 0=FALSE)", display=display.data_window)
+
+
+// Transformăm variabila booleană într-o valoare numerică
+numericBoolVariable3 = IsCrossedDaily ? 1 : 0
+// Afișăm variabila numerică în Data Window
+plot(numericBoolVariable3, title="IsCrossedDaily (1=TRUE, 0=FALSE)", display=display.data_window)
+
